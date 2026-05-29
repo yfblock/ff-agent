@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ff-agent</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1 id="agent-name">ff-agent</h1>
+      </div>
+      <div class="topbar-actions">
+        <button id="btn-reset" class="btn btn-ghost" type="button">清空会话</button>
+        <button id="btn-toggle-settings" class="btn btn-primary" type="button">设置</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <main class="chat-panel">
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="activity" class="activity hidden">
+          <div class="activity-label">思考 / 工具</div>
+          <pre id="activity-text"></pre>
+        </div>
+        <form id="chat-form" class="composer">
+          <textarea
+            id="chat-input"
+            rows="1"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行…"
+            autocomplete="off"
+          ></textarea>
+          <button id="btn-send" class="btn btn-primary" type="submit">发送</button>
+        </form>
+      </main>
+
+      <aside id="settings-panel" class="settings-panel hidden-mobile">
+        <div class="settings-header">
+          <h2>设置</h2>
+          <button id="btn-close-settings" class="btn btn-ghost btn-icon" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <section class="setting-block">
+          <label for="model-select">模型</label>
+          <select id="model-select"></select>
+          <p id="model-detail" class="hint"></p>
+        </section>
+
+        <section class="setting-block">
+          <label for="role-select">身份 Role</label>
+          <select id="role-select"></select>
+          <p id="role-detail" class="hint"></p>
+        </section>
+
+        <section class="setting-block">
+          <label for="workspace-input">工作区路径</label>
+          <div class="inline-row">
+            <input id="workspace-input" type="text" placeholder="." />
+            <button id="btn-workspace-default" class="btn btn-ghost" type="button">默认</button>
+          </div>
+          <p id="workspace-detail" class="hint"></p>
+        </section>
+
+        <section class="setting-block">
+          <label class="checkbox-row">
+            <input id="thinking-toggle" type="checkbox" />
+            <span>思考模式</span>
+          </label>
+          <p id="thinking-detail" class="hint"></p>
+        </section>
+
+        <div class="settings-footer">
+          <button id="btn-save-settings" class="btn btn-primary" type="button">保存设置</button>
+          <p id="settings-status" class="status"></p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
