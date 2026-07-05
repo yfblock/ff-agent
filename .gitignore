@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 .env
 data/
+
+# pip 误操作产生的版本号文件（如 =42.0.0）
+=*
