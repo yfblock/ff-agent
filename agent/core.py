@@ -459,7 +459,9 @@ class Agent:
                 max_tool_steps=self.config.max_assign_tool_steps,
                 max_rounds=self.config.max_assign_rounds,
             )
-            return runner.run()
+            from agent.graph_assign import run_assign_graph
+
+            return run_assign_graph(runner)
         finally:
             self._assign_running = False
             self._assign_state = None
@@ -495,7 +497,9 @@ class Agent:
                 on_event=on_event,
                 max_rounds=self.config.max_discuss_rounds,
             )
-            return runner.run()
+            from agent.graph_discuss import run_discuss_graph
+
+            return run_discuss_graph(runner)
         finally:
             self._discuss_running = False
             self._discuss_waiting_user = False
@@ -1029,6 +1033,17 @@ class Agent:
         with self._chat_lock:
             return self._chat_locked(user_input, on_event, user_content=user_content)
 
+    @property
+    def model_factory(self):
+        """Lazily-built per-profile LLM engine factory."""
+        factory = getattr(self, "_model_factory", None)
+        if factory is None:
+            from agent.lc_llm import ChatModelFactory
+
+            factory = ChatModelFactory(self.config)
+            self._model_factory = factory
+        return factory
+
     def _chat_locked(
         self,
         user_input: str,
@@ -1041,125 +1056,58 @@ class Agent:
             user_content if user_content is not None else user_input
         )
         self.messages.append({"role": "user", "content": content})
+        self._sanitize_messages_in_place()
+
         saved_memories: list[str] = []
         role_changes: list[str] = []
 
         _emit(on_event, {"type": "turn_start"})
 
-        while True:
-            self._sanitize_messages_in_place()
-            message = None
-            reasoning_text = ""
-            content_text = ""
-            pending_tool_name = ""
-            pending_tool_args = ""
-            saw_thinking_delta = False
+        graph = getattr(self, "_chat_graph", None)
+        if graph is None:
+            from agent.graph_chat import build_chat_graph
 
-            for event in self.llm.chat_stream(self.messages, tools=self._available_tools()):
-                event_type = event.get("type")
-                if event_type == "thinking_delta":
-                    saw_thinking_delta = True
-                    reasoning_text = str(event.get("text") or "")
-                    _emit(
-                        on_event,
-                        {
-                            "type": "thinking_delta",
-                            "text": reasoning_text,
-                            "delta": event.get("delta", ""),
-                        },
-                    )
-                elif event_type == "content_delta":
-                    content_text = str(event.get("text") or "")
-                    _emit(
-                        on_event,
-                        {
-                            "type": "content_delta",
-                            "text": content_text,
-                            "delta": event.get("delta", ""),
-                        },
-                    )
-                elif event_type == "tool_call_delta":
-                    pending_tool_name = str(event.get("name") or pending_tool_name)
-                    pending_tool_args = str(event.get("arguments") or "")
-                    args = try_parse_tool_args(pending_tool_args)
-                    _emit(
-                        on_event,
-                        {
-                            "type": "tool_call_delta",
-                            "name": pending_tool_name,
-                            "arguments": args,
-                            "arguments_raw": pending_tool_args,
-                            "title": format_tool_title(pending_tool_name, args),
-                            "detail": format_tool_detail(pending_tool_name, args),
-                        },
-                    )
-                elif event_type == "message_complete":
-                    message = event.get("message")
-                    reasoning_text = str(event.get("reasoning") or reasoning_text)
-                    content_text = str(event.get("content") or content_text)
+            graph = build_chat_graph(self)
+            self._chat_graph = graph
+        state = {
+            "messages": self.messages,
+            "user_query": user_input,
+            "saved_memories": saved_memories,
+            "role_changes": role_changes,
+            "step_count": 0,
+            "on_event": on_event,
+        }
+        result = graph.invoke(
+            state,
+            config={
+                "recursion_limit": max(8, self.config.max_chat_steps * 2 + 4),
+            },
+        )
+        # The graph mutates self.messages in place (dict-native state); keep the
+        # returned list authoritative in case LangGraph replaced the reference.
+        self.messages = result["messages"]
+        saved_memories = result.get("saved_memories", saved_memories)
+        role_changes = result.get("role_changes", role_changes)
 
-            if message is None:
-                raise RuntimeError("LLM 流式响应未返回完整消息")
+        reply = ""
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+                reply = msg.get("content") or ""
+                break
 
-            if reasoning_text:
-                if not saw_thinking_delta:
-                    _emit(
-                        on_event,
-                        {
-                            "type": "thinking_delta",
-                            "text": reasoning_text,
-                            "delta": reasoning_text,
-                        },
-                    )
-                _emit(
-                    on_event,
-                    {"type": "thinking_done", "text": reasoning_text},
-                )
+        notes: list[str] = []
+        if saved_memories:
+            notes.extend(f"【已写入长期记忆】{content}" for content in saved_memories)
+        if role_changes:
+            notes.extend(f"【已更新 role】{change}" for change in role_changes)
+        if notes:
+            block = "\n".join(notes)
+            reply = f"{reply}\n\n{block}" if reply.strip() else block
 
-            assistant_msg = serialize_assistant_message(message)
-            self.messages.append(assistant_msg)
+        _emit(on_event, {"type": "turn_end", "reply": reply})
+        self._persist_messages()
+        return reply
 
-            if not message.tool_calls:
-                reply = message.content or content_text or ""
-                notes: list[str] = []
-                if saved_memories:
-                    notes.extend(
-                        f"【已写入长期记忆】{content}" for content in saved_memories
-                    )
-                if role_changes:
-                    notes.extend(f"【已更新 role】{change}" for change in role_changes)
-                if notes:
-                    block = "\n".join(notes)
-                    reply = f"{reply}\n\n{block}" if reply.strip() else block
-                _emit(on_event, {"type": "turn_end", "reply": reply})
-                self._persist_messages()
-                return reply
-
-            if message.tool_calls:
-                _emit(
-                    on_event,
-                    {
-                        "type": "tool_calls_ready",
-                        "count": len(message.tool_calls),
-                    },
-                )
-
-            for call in message.tool_calls:
-                result = self._handle_tool_call(
-                    call.function.name,
-                    call.function.arguments,
-                    saved_memories,
-                    role_changes,
-                    on_event,
-                )
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    }
-                )
-            self.refresh_system_prompt(user_input)
 
     def reset(self) -> None:
         self._pending_attachments.clear()

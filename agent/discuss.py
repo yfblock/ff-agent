@@ -173,7 +173,8 @@ def parse_status(content: str) -> tuple[str, str]:
         return "consensus", body or summary
     if upper.startswith("NEED_USER:") or upper.startswith("NEED-USER:"):
         question = first_line.split(":", 1)[1].strip()
-        return "need_user", body or question
+        combined = f"{question}\n{body}".strip() if body else question
+        return "need_user", combined
     return "continue", text
 
 
@@ -497,6 +498,51 @@ class DiscussRunner:
             )
         return finals
 
+    def _run_round(self, round_num: int) -> bool:
+        """Run one discussion round. Returns True if it paused for user input.
+
+        Shared by the classic runner (run()) and the LangGraph discuss graph.
+        Emits discuss_round + per-participant events and appends turns to the
+        transcript, exactly as the inline round body did.
+        """
+        self._emit({"type": "discuss_round", "round": round_num})
+        for profile in self.state.profiles:
+            if self.stop_event.is_set():
+                break
+            self._emit(
+                {
+                    "type": "discuss_turn_start",
+                    "round": round_num,
+                    "profile": profile.name,
+                    "model": profile.model,
+                }
+            )
+            try:
+                turn = self._ask_participant(profile, round_num)
+            except OpenAIError as exc:
+                turn = DiscussTurn(
+                    round_num=round_num,
+                    profile_name=profile.name,
+                    model=profile.model,
+                    content=f"调用失败: {exc}",
+                    status="continue",
+                )
+            self.state.transcript.append(turn)
+            self._emit(
+                {
+                    "type": "discuss_turn",
+                    "round": round_num,
+                    "profile": profile.name,
+                    "model": profile.model,
+                    "status": turn.status,
+                    "content": turn.content,
+                }
+            )
+            if turn.status == "need_user":
+                self._pause_for_user(turn.content, round_num)
+                return True
+        return False
+
     def run(self) -> DiscussResult:
         self._emit(
             {
@@ -512,44 +558,7 @@ class DiscussRunner:
         for round_num in range(1, self.max_rounds + 1):
             if self.stop_event.is_set():
                 break
-            self._emit({"type": "discuss_round", "round": round_num})
-            round_paused = False
-            for profile in self.state.profiles:
-                if self.stop_event.is_set():
-                    break
-                self._emit(
-                    {
-                        "type": "discuss_turn_start",
-                        "round": round_num,
-                        "profile": profile.name,
-                        "model": profile.model,
-                    }
-                )
-                try:
-                    turn = self._ask_participant(profile, round_num)
-                except OpenAIError as exc:
-                    turn = DiscussTurn(
-                        round_num=round_num,
-                        profile_name=profile.name,
-                        model=profile.model,
-                        content=f"调用失败: {exc}",
-                        status="continue",
-                    )
-                self.state.transcript.append(turn)
-                self._emit(
-                    {
-                        "type": "discuss_turn",
-                        "round": round_num,
-                        "profile": profile.name,
-                        "model": profile.model,
-                        "status": turn.status,
-                        "content": turn.content,
-                    }
-                )
-                if turn.status == "need_user":
-                    self._pause_for_user(turn.content, round_num)
-                    round_paused = True
-                    break
+            round_paused = self._run_round(round_num)
 
             if round_paused:
                 if self.stop_event.is_set():

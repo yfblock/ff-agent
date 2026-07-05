@@ -41,6 +41,7 @@ class Config:
     max_assign_turns: int
     max_assign_tool_steps: int
     max_assign_rounds: int
+    max_chat_steps: int
 
 
 @dataclass(frozen=True)
@@ -238,6 +239,7 @@ def load_config(
     max_assign_turns = int(os.getenv("MAX_ASSIGN_TURNS", "24"))
     max_assign_tool_steps = int(os.getenv("MAX_ASSIGN_TOOL_STEPS", "40"))
     max_assign_rounds = int(os.getenv("MAX_ASSIGN_ROUNDS", "3"))
+    max_chat_steps = int(os.getenv("MAX_CHAT_STEPS", "40"))
 
     return Config(
         api_key=api_key,
@@ -269,4 +271,5 @@ def load_config(
         max_assign_turns=max_assign_turns,
         max_assign_tool_steps=max_assign_tool_steps,
         max_assign_rounds=max_assign_rounds,
+        max_chat_steps=max_chat_steps,
     )

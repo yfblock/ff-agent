@@ -97,7 +97,7 @@ def parse_assign_pairs(raw: str) -> list[tuple[str, str]] | str:
     if not text:
         return "任务不能为空"
 
-    if ";;" in text and "|" not in text:
+    if ":" in text and "|" not in text:
         pairs: list[tuple[str, str]] = []
         for part in text.split(";;"):
             part = part.strip()
@@ -138,6 +138,7 @@ def parse_assign_start(text: str, resolve_profile: Callable[[str], ModelProfile]
         return parsed
 
     jobs: list[AssignJob] = []
+    errors: list[str] = []
     for index, (model_name, task) in enumerate(parsed):
         profile_name = model_name.strip()
         if not profile_name:
@@ -145,11 +146,13 @@ def parse_assign_start(text: str, resolve_profile: Callable[[str], ModelProfile]
         try:
             resolve_profile(profile_name)
         except ValueError as exc:
-            return str(exc)
+            errors.append(str(exc))
         jobs.append(AssignJob(profile_name=profile_name, task=task, index=index))
 
+    if errors:
+        return "\n".join(errors)
     if len(jobs) < 2:
-        return "流水线至少需要 2 个模型（1 个执行 + 1 个审查）"
+        return "流水线至少 2 个模型（1 个执行 + 1 个审查）"
     return AssignStart(jobs=tuple(jobs))
 
 
@@ -642,7 +645,11 @@ class AssignRunner:
             worker.error = str(exc)
             return "error"
 
-    def run(self) -> AssignResult:
+    def _prepare_workers(self) -> None:
+        """Resolve profiles, build worker states, and emit assign_start.
+
+        Shared by the classic runner (run()) and the LangGraph pipeline graph.
+        """
         warnings: list[str] = []
         workers: list[AssignWorkerState] = []
         for job in self.state.jobs:
@@ -653,7 +660,6 @@ class AssignRunner:
                     warnings.append(warning)
             workers.append(AssignWorkerState(job=job, profile=profile))
         self.state.workers = workers
-        total = len(self.state.jobs)
         self._emit(
             {
                 "type": "assign_start",
@@ -677,6 +683,8 @@ class AssignRunner:
             }
         )
 
+    def run(self) -> AssignResult:
+        self._prepare_workers()
         self._run_pipeline()
         return self._finalize_result()
 
